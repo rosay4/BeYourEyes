@@ -2,7 +2,9 @@
 
 import Slider from '@react-native-community/slider';
 import { AVPlaybackStatus, ResizeMode, Video } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
 import React, { useRef, useState } from 'react';
 import { Dimensions, Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ActivityIndicator, Button, Provider as PaperProvider } from 'react-native-paper';
@@ -15,7 +17,9 @@ export default function ImportScreen() {
   const [status, setStatus] = useState<AVPlaybackStatus | {}>({});
   const [durationMillis, setDurationMillis] = useState<number>(0);
   const [startTime, setStartTime] = useState<number>(0);
-    const [isLoading, setIsLoading] = useState<boolean>(false); 
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadingText, setLoadingText] = useState(''); // 新增：更详细的加载文本
+  const router = useRouter(); // 2. 获取 router 实例 
   
   const videoPlayer = useRef<Video>(null);
 
@@ -55,14 +59,49 @@ export default function ImportScreen() {
     
     setIsLoading(true); // 开始加载
     try {
+      setLoadingText('正在抽取视频帧 (1/3)');
+      setIsLoading(true);
       const startTimeInSeconds = startTime / 1000;
       const frameUris = await VideoProcessingService.extractFrames(videoUri, startTimeInSeconds);
+
+       // --- 第2阶段：像素化 ---
+      setLoadingText(`正在像素化 ${frameUris.length} 帧 (2/3)`);
+      const finalFrames: number[][][] = []; // 准备存放最终的 8x8 矩阵数组
+
+      for (const frameUri of frameUris) {
+        const pixelData = await VideoProcessingService.pixelateImage(frameUri);
+        
+        // --- 第3阶段：二值化和格式化 ---
+        const grid: number[][] = [];
+        let row: number[] = [];
+        pixelData.forEach((grayValue, index) => {
+          // 应用阈值：大于128则为1（亮），否则为0（暗）
+          row.push(grayValue > 128 ? 1 : 0);
+          
+          if (row.length === 8) {
+            grid.push(row);
+            row = [];
+          }
+        });
+        finalFrames.push(grid);
+      }
       
-      // 成功！
+      // --- 第4阶段：清理和跳转 ---
+      setLoadingText('处理完成！(3/3)');
+      // 删除包含抽帧图片的临时文件夹
+      const tempDir = frameUris[0].substring(0, frameUris[0].lastIndexOf('/'));
+      await FileSystem.deleteAsync(tempDir, { idempotent: true });
+      
+      console.log("最终生成的像素矩阵动画:", finalFrames);
+      
+      // 将最终数据通过路由参数传递给创作页面
+      // 我们需要先将它序列化为 JSON 字符串
+      const framesJson = JSON.stringify(finalFrames);
+      
       setIsLoading(false);
-      alert(`成功抽取出 ${frameUris.length} 帧图片！请在终端查看文件路径。`);
-      console.log("抽取的帧URI列表:", frameUris);
-      // 在下一阶段，我们会把这个 frameUris 传递给图像处理步骤
+
+      // 使用 router 跳转回去，并带上参数
+      router.replace({ pathname: '/(tabs)/creator', params: { importedFrames: framesJson } });
       
     } catch (error) {
       // 失败

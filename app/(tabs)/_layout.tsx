@@ -1,42 +1,123 @@
 // app/(tabs)/_layout.tsx
-import { MaterialIcons } from '@expo/vector-icons'; // 导入我们刚刚安装的图标库
+import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
+
+// 自定义带动画的 Tab 按钮
+function CustomTabBarButton({ children, onPress, accessibilityState }: any) {
+  const focused = accessibilityState?.selected;
+  const scaleValue = React.useRef(new Animated.Value(1)).current;
+
+  const onPressIn = () => {
+    Animated.spring(scaleValue, {
+      toValue: 0.9,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const onPressOut = () => {
+    Animated.spring(scaleValue, {
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+      style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+    >
+      <Animated.View style={{ transform: [{ scale: scaleValue }] }}>
+        {children}
+      </Animated.View>
+      {focused && (
+        <View style={{
+          width: 6,
+          height: 6,
+          backgroundColor: '#007AFF',
+          borderRadius: 3,
+          marginTop: 4,
+        }} />
+      )}
+    </Pressable>
+  );
+}
+
+function TabBarIcon(props: {
+  name: React.ComponentProps<typeof Ionicons>['name'];
+  color: string;
+}) {
+  return <Ionicons size={26} style={{ marginBottom: -3 }} {...props} />;
+}
 
 export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        // 这里可以统一设置所有标签页的样式
-        tabBarActiveTintColor: '#1E90FF', // 选中时的颜色
-        headerShown: false, // 我们暂时不显示每个屏幕顶部的标题栏
-      }}>
+        tabBarActiveTintColor: '#8629ffff',
+        headerShown: false,
+        animation: 'shift',
+        tabBarStyle: {
+          position: 'absolute',
+          bottom: 0,
+          left: 16,
+          right: 16,
+          borderRadius: 20,
+          height: 60,
+          paddingBottom: 8,
+          paddingTop: 8,
+          borderTopWidth: 0,
+          backgroundColor: 'transparent',
+          elevation: 0,
+          ...Platform.select({
+            android: {
+              overflow: 'hidden',
+            },
+          }),
+        },
+        tabBarBackground: () => (
+          <BlurView
+            intensity={100}
+            tint="light"
+            style={StyleSheet.absoluteFill}
+          />
+        ),
+      }}
+    >
       <Tabs.Screen
-        name="device" // 注意：这里的 name 必须和文件名完全对应
+        name="device"
         options={{
-          title: '设备', // 标签栏上显示的文字
-          tabBarIcon: ({ color }) => <MaterialIcons name="devices" size={28} color={color} />,
+          title: '设备',
+          tabBarIcon: ({ color }) => <TabBarIcon name="hardware-chip-outline" color={color} />,
+          tabBarButton: (props) => <CustomTabBarButton {...props} />,
         }}
       />
       <Tabs.Screen
-        name="creator" // 对应 creator.tsx
+        name="creator"
         options={{
           title: '创作',
-          tabBarIcon: ({ color }) => <MaterialIcons name="edit" size={28} color={color} />,
+          tabBarIcon: ({ color }) => <TabBarIcon name="brush-outline" color={color} />,
+          tabBarButton: (props) => <CustomTabBarButton {...props} />,
         }}
       />
       <Tabs.Screen
-        name="store" // 对应 store.tsx
+        name="store"
         options={{
-          title: '商店',
-          tabBarIcon: ({ color }) => <MaterialIcons name="store" size={28} color={color} />,
+          title: '作品',
+          tabBarIcon: ({ color }) => <TabBarIcon name="albums-outline" color={color} />,
+          tabBarButton: (props) => <CustomTabBarButton {...props} />,
         }}
       />
       <Tabs.Screen
-        name="settings" // 对应 settings.tsx
+        name="settings"
         options={{
           title: '设置',
-          tabBarIcon: ({ color }) => <MaterialIcons name="settings" size={28} color={color} />,
+          tabBarIcon: ({ color }) => <TabBarIcon name="settings-outline" color={color} />,
+          tabBarButton: (props) => <CustomTabBarButton {...props} />,
         }}
       />
     </Tabs>

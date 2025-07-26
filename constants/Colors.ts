@@ -6,21 +6,31 @@
 const tintColorLight = '#0a7ea4';
 const tintColorDark = '#fff';
 
-export const Colors = {
+export default {
   light: {
-    text: '#11181C',
-    background: '#fff',
+    text: '#111827',
+    background: '#f8fafc', // 柔和的白色背景
     tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
+    icon: '#687980',
+    tabIconDefault: '#687980',
     tabIconSelected: tintColorLight,
+    card: '#ffffff', // 卡片颜色
+    border: '#e2e8f0', // 边框颜色
+    primary: '#3b82f6', // 主题蓝色
+    accent: '#10b981', // 强调绿色 (成功/点亮)
+    danger: '#ef4444', // 危险红色 (删除/失败)
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
+    text: '#ecf0f1',
+    background: '#1e293b', // 深蓝灰背景
     tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
+    icon: '#94a3b8',
+    tabIconDefault: '#94a3b8',
     tabIconSelected: tintColorDark,
+    card: '#334155', // 深色卡片
+    border: '#475569', // 深色边框
+    primary: '#60a5fa',
+    accent: '#34d399',
+    danger: '#f87171',
   },
 };

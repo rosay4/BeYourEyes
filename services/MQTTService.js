@@ -6,6 +6,8 @@ let client;
 // --- 在这里配置你的 MQTT 服务器信息 ---
 const BROKER_URL = 'ws://192.168.43.239:9001/mqtt'; // ！！必须替换成你的服务器地址
 const TOPIC_TO_PUBLISH = 'LumiPet/pattern/set'; // 我们要发送数据到的主题
+export const TOPIC_ANIMATION_LIST_SET = 'bye/001/animate/list/set'; // 新增
+export const TOPIC_ANIMATION_PLAY_SET = 'bye/001/animate/set'; // 新增
 
 const options = {
   // clean: true, // true: 不接收离线消息

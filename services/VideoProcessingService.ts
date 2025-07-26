@@ -54,6 +54,48 @@ class VideoProcessingService {
       throw new Error(`FFmpeg failed with return code ${returnCode}`);
     }
   }
+   /**
+   * 将单张图片像素化为 8x8 的灰度数据
+   * @param imageUri 输入图片 URI
+   * @returns 返回一个包含 64 个灰度值 (0-255) 的数组
+   */
+  async pixelateImage(imageUri: string): Promise<Uint8Array> {
+    // 1. 定义输出的二进制文件名
+    const outputUri = `${imageUri}.bin`;
+
+    // 2. 构建 FFmpeg 命令
+    // -i {input}: 输入图片
+    // -vf "scale=8:8,format=gray": 视频滤镜 (vf)
+    //    - scale=8:8 : 将图片强制缩放为 8x8 像素
+    //    - format=gray: 将颜色转为灰度
+    // -f rawvideo: 输出为原始视频数据（无压缩、无容器）
+    const command = `-i "${imageUri}" -vf "scale=8:8,format=gray" -f rawvideo "${outputUri}"`;
+
+    // 3. 执行命令
+    const session = await FFmpegKit.execute(command);
+    const returnCode = await session.getReturnCode();
+
+    // 4. 检查结果并读取数据
+    if (ReturnCode.isSuccess(returnCode)) {
+      // 读取生成的二进制文件内容
+      const binaryContent = await FileSystem.readAsStringAsync(outputUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      // 将 Base64 字符串解码为字节数组 (Uint8Array)
+      const decoded = Uint8Array.from(atob(binaryContent), c => c.charCodeAt(0));
+      
+      // 删除临时的二进制文件
+      await FileSystem.deleteAsync(outputUri);
+      
+      return decoded; // 返回包含 64 个灰度值的数组
+    } else {
+      console.error("FFmpeg 像素化失败。");
+      const logs = await session.getLogsAsString();
+      console.error("FFmpeg 日志:", logs);
+      throw new Error(`FFmpeg failed to pixelate image with code ${returnCode}`);
+    }
+  }
 }
 
 export default new VideoProcessingService();
