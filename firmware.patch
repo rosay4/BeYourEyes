@@ -1,0 +1,1670 @@
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index a4b8f2b..8187ab9 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -216,6 +216,8 @@ elseif(CONFIG_BOARD_TYPE_LABPLUS_LEDONG_V2)
+     set(BOARD_TYPE "labplus-ledong-v2") 
+ elseif(CONFIG_BOARD_TYPE_SURFER_C3_1_14TFT)
+     set(BOARD_TYPE "surfer-c3-1.14tft")
++elseif(CONFIG_BOARD_TYPE_BREAD_BE_YOUR_EYES)
++    set(BOARD_TYPE "esp32-s3-bye")
+ endif()
+ file(GLOB BOARD_SOURCES
+     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/*.cc
+@@ -223,6 +225,13 @@ file(GLOB BOARD_SOURCES
+ )
+ list(APPEND SOURCES ${BOARD_SOURCES})
+ 
++file(
++    GLOB_RECURSE BYE_SOURCE
++    "${CMAKE_CURRENT_SOURCE_DIR}/modules/*.cc"
++    "${CMAKE_CURRENT_SOURCE_DIR}/modules/*.c"
++)
++list(APPEND SOURCES ${BYE_SOURCE})
++
+ if(CONFIG_USE_AUDIO_PROCESSOR)
+     list(APPEND SOURCES "audio/processors/afe_audio_processor.cc")
+ else()
+@@ -334,4 +343,4 @@ spiffs_create_partition_assets(
+     FLASH_IN_PROJECT
+     MMAP_FILE_SUPPORT_FORMAT ".aaf"
+ )
+-endif()
+\ No newline at end of file
++endif()
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index 2cb27d6..6b40406 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -28,6 +28,9 @@ choice BOARD_TYPE
+     default BOARD_TYPE_BREAD_COMPACT_WIFI
+     help
+         Board type. 开发板类型
++    config BOARD_TYPE_BREAD_BE_YOUR_EYES
++        bool "Be Your Eyes Board"
++        depends on IDF_TARGET_ESP32S3
+     config BOARD_TYPE_BREAD_COMPACT_WIFI
+         bool "面包板新版接线（WiFi）"
+         depends on IDF_TARGET_ESP32S3
+diff --git a/main/application.cc b/main/application.cc
+index 3c7dea2..de19dc5 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -1,6 +1,6 @@
+ #include "application.h"
+ #include "board.h"
+-#include "display.h"
++// #include "display.h"
+ #include "system_info.h"
+ #include "audio_codec.h"
+ #include "mqtt_protocol.h"
+@@ -8,6 +8,7 @@
+ #include "font_awesome_symbols.h"
+ #include "assets/lang_config.h"
+ #include "mcp_server.h"
++#include "modules/bye.h"
+ 
+ #include <cstring>
+ #include <esp_log.h>
+@@ -46,17 +47,17 @@ Application::Application() {
+     aec_mode_ = kAecOff;
+ #endif
+ 
+-    esp_timer_create_args_t clock_timer_args = {
+-        .callback = [](void* arg) {
+-            Application* app = (Application*)arg;
+-            app->OnClockTimer();
+-        },
+-        .arg = this,
+-        .dispatch_method = ESP_TIMER_TASK,
+-        .name = "clock_timer",
+-        .skip_unhandled_events = true
+-    };
+-    esp_timer_create(&clock_timer_args, &clock_timer_handle_);
++    // esp_timer_create_args_t clock_timer_args = {
++    //     .callback = [](void* arg) {
++    //         Application* app = (Application*)arg;
++    //         app->OnClockTimer();
++    //     },
++    //     .arg = this,
++    //     .dispatch_method = ESP_TIMER_TASK,
++    //     .name = "clock_timer",
++    //     .skip_unhandled_events = true
++    // };
++    // esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+ }
+ 
+ Application::~Application() {
+@@ -75,8 +76,8 @@ void Application::CheckNewVersion(Ota& ota) {
+     auto& board = Board::GetInstance();
+     while (true) {
+         SetDeviceState(kDeviceStateActivating);
+-        auto display = board.GetDisplay();
+-        display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
++        // auto display = board.GetDisplay();
++        // display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+ 
+         if (!ota.CheckVersion()) {
+             retry_count++;
+@@ -102,44 +103,44 @@ void Application::CheckNewVersion(Ota& ota) {
+         retry_count = 0;
+         retry_delay = 10; // 重置重试延迟时间
+ 
+-        if (ota.HasNewVersion()) {
+-            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
++        // if (ota.HasNewVersion()) {
++        //     Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
+ 
+-            vTaskDelay(pdMS_TO_TICKS(3000));
++        //     vTaskDelay(pdMS_TO_TICKS(3000));
+ 
+-            SetDeviceState(kDeviceStateUpgrading);
++        //     SetDeviceState(kDeviceStateUpgrading);
+             
+-            display->SetIcon(FONT_AWESOME_DOWNLOAD);
+-            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota.GetFirmwareVersion();
+-            display->SetChatMessage("system", message.c_str());
+-
+-            board.SetPowerSaveMode(false);
+-            audio_service_.Stop();
+-            vTaskDelay(pdMS_TO_TICKS(1000));
+-
+-            bool upgrade_success = ota.StartUpgrade([display](int progress, size_t speed) {
+-                char buffer[64];
+-                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+-                display->SetChatMessage("system", buffer);
+-            });
+-
+-            if (!upgrade_success) {
+-                // Upgrade failed, restart audio service and continue running
+-                ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
+-                audio_service_.Start(); // Restart audio service
+-                board.SetPowerSaveMode(true); // Restore power save mode
+-                Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "sad", Lang::Sounds::P3_EXCLAMATION);
+-                vTaskDelay(pdMS_TO_TICKS(3000));
+-                // Continue to normal operation (don't break, just fall through)
+-            } else {
+-                // Upgrade success, reboot immediately
+-                ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
+-                display->SetChatMessage("system", "Upgrade successful, rebooting...");
+-                vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
+-                Reboot();
+-                return; // This line will never be reached after reboot
+-            }
+-        }
++        //     // display->SetIcon(FONT_AWESOME_DOWNLOAD);
++        //     // std::string message = std::string(Lang::Strings::NEW_VERSION) + ota.GetFirmwareVersion();
++        //     // display->SetChatMessage("system", message.c_str());
++
++        //     board.SetPowerSaveMode(false);
++        //     audio_service_.Stop();
++        //     vTaskDelay(pdMS_TO_TICKS(1000));
++
++        //     bool upgrade_success = ota.StartUpgrade([display](int progress, size_t speed) {
++        //         char buffer[64];
++        //         snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
++        //         display->SetChatMessage("system", buffer);
++        //     });
++
++        //     if (!upgrade_success) {
++        //         // Upgrade failed, restart audio service and continue running
++        //         ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
++        //         audio_service_.Start(); // Restart audio service
++        //         board.SetPowerSaveMode(true); // Restore power save mode
++        //         Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "sad", Lang::Sounds::P3_EXCLAMATION);
++        //         vTaskDelay(pdMS_TO_TICKS(3000));
++        //         // Continue to normal operation (don't break, just fall through)
++        //     } else {
++        //         // Upgrade success, reboot immediately
++        //         ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
++        //         // display->SetChatMessage("system", "Upgrade successful, rebooting...");
++        //         vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
++        //         Reboot();
++        //         return; // This line will never be reached after reboot
++        //     }
++        // }
+ 
+         // No new version, mark the current version as valid
+         ota.MarkCurrentVersionValid();
+@@ -149,7 +150,7 @@ void Application::CheckNewVersion(Ota& ota) {
+             break;
+         }
+ 
+-        display->SetStatus(Lang::Strings::ACTIVATION);
++        // display->SetStatus(Lang::Strings::ACTIVATION);
+         // Activation code is shown to the user and waiting for the user to input
+         if (ota.HasActivationCode()) {
+             ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
+@@ -206,22 +207,22 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
+ 
+ void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
+     ESP_LOGW(TAG, "Alert %s: %s [%s]", status, message, emotion);
+-    auto display = Board::GetInstance().GetDisplay();
+-    display->SetStatus(status);
+-    display->SetEmotion(emotion);
+-    display->SetChatMessage("system", message);
++    // auto display = Board::GetInstance().GetDisplay();
++    // display->SetStatus(status);
++    // display->SetEmotion(emotion);
++    // display->SetChatMessage("system", message);
+     if (!sound.empty()) {
+         audio_service_.PlaySound(sound);
+     }
+ }
+ 
+ void Application::DismissAlert() {
+-    if (device_state_ == kDeviceStateIdle) {
+-        auto display = Board::GetInstance().GetDisplay();
+-        display->SetStatus(Lang::Strings::STANDBY);
+-        display->SetEmotion("neutral");
+-        display->SetChatMessage("system", "");
+-    }
++    // if (device_state_ == kDeviceStateIdle) {
++    //     auto display = Board::GetInstance().GetDisplay();
++    //     display->SetStatus(Lang::Strings::STANDBY);
++    //     display->SetEmotion("neutral");
++    //     display->SetChatMessage("system", "");
++    // }
+ }
+ 
+ void Application::ToggleChatState() {
+@@ -328,8 +329,11 @@ void Application::Start() {
+     auto& board = Board::GetInstance();
+     SetDeviceState(kDeviceStateStarting);
+ 
++    // Initialize BYE modules
++    BYE::get_instance().init();
++
+     /* Setup the display */
+-    auto display = board.GetDisplay();
++    // auto display = board.GetDisplay();
+ 
+     /* Setup the audio service */
+     auto codec = board.GetAudioCodec();
+@@ -355,14 +359,15 @@ void Application::Start() {
+     board.StartNetwork();
+ 
+     // Update the status bar immediately to show the network state
+-    display->UpdateStatusBar(true);
++    // display->UpdateStatusBar(true);
+ 
+     // Check for new firmware version or get the MQTT broker address
+     Ota ota;
+     CheckNewVersion(ota);
+ 
++    BYE::get_instance().connect();
+     // Initialize the protocol
+-    display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
++    // display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
+ 
+     // Add MCP common tools before initializing the protocol
+     McpServer::GetInstance().AddCommonTools();
+@@ -395,12 +400,12 @@ void Application::Start() {
+     protocol_->OnAudioChannelClosed([this, &board]() {
+         board.SetPowerSaveMode(true);
+         Schedule([this]() {
+-            auto display = Board::GetInstance().GetDisplay();
+-            display->SetChatMessage("system", "");
++            // auto display = Board::GetInstance().GetDisplay();
++            // display->SetChatMessage("system", "");
+             SetDeviceState(kDeviceStateIdle);
+         });
+     });
+-    protocol_->OnIncomingJson([this, display](const cJSON* root) {
++    protocol_->OnIncomingJson([this](const cJSON* root) {
+         // Parse JSON data
+         auto type = cJSON_GetObjectItem(root, "type");
+         if (strcmp(type->valuestring, "tts") == 0) {
+@@ -426,26 +431,26 @@ void Application::Start() {
+                 auto text = cJSON_GetObjectItem(root, "text");
+                 if (cJSON_IsString(text)) {
+                     ESP_LOGI(TAG, "<< %s", text->valuestring);
+-                    Schedule([this, display, message = std::string(text->valuestring)]() {
+-                        display->SetChatMessage("assistant", message.c_str());
+-                    });
++                    // Schedule([this, display, message = std::string(text->valuestring)]() {
++                    //     display->SetChatMessage("assistant", message.c_str());
++                    // });
+                 }
+             }
+         } else if (strcmp(type->valuestring, "stt") == 0) {
+             auto text = cJSON_GetObjectItem(root, "text");
+             if (cJSON_IsString(text)) {
+                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+-                Schedule([this, display, message = std::string(text->valuestring)]() {
+-                    display->SetChatMessage("user", message.c_str());
+-                });
++                // Schedule([this, display, message = std::string(text->valuestring)]() {
++                //     display->SetChatMessage("user", message.c_str());
++                // });
+             }
+         } else if (strcmp(type->valuestring, "llm") == 0) {
+-            auto emotion = cJSON_GetObjectItem(root, "emotion");
+-            if (cJSON_IsString(emotion)) {
+-                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
+-                    display->SetEmotion(emotion_str.c_str());
+-                });
+-            }
++            // auto emotion = cJSON_GetObjectItem(root, "emotion");
++            // if (cJSON_IsString(emotion)) {
++            //     Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
++            //         display->SetEmotion(emotion_str.c_str());
++            //     });
++            // }
+         } else if (strcmp(type->valuestring, "mcp") == 0) {
+             auto payload = cJSON_GetObjectItem(root, "payload");
+             if (cJSON_IsObject(payload)) {
+@@ -473,31 +478,33 @@ void Application::Start() {
+             } else {
+                 ESP_LOGW(TAG, "Alert command requires status, message and emotion");
+             }
+-#if CONFIG_RECEIVE_CUSTOM_MESSAGE
+         } else if (strcmp(type->valuestring, "custom") == 0) {
+             auto payload = cJSON_GetObjectItem(root, "payload");
+             ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
+-            if (cJSON_IsObject(payload)) {
+-                Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
+-                    display->SetChatMessage("system", payload_str.c_str());
+-                });
+-            } else {
+-                ESP_LOGW(TAG, "Invalid custom message format: missing payload");
+-            }
+-#endif
++
++            // if (cJSON_IsObject(payload)) {
++            //     Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
++            //         display->SetChatMessage("system", payload_str.c_str());
++            //     });
++            // } else {
++            //     ESP_LOGW(TAG, "Invalid custom message format: missing payload");
++            // }
+         } else {
+             ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
+         }
+     });
++
++    ESP_LOGI(TAG, "before starting protocol");
+     bool protocol_started = protocol_->Start();
++    ESP_LOGI(TAG, "started");
+ 
+     SetDeviceState(kDeviceStateIdle);
+ 
+-    has_server_time_ = ota.HasServerTime();
++    // has_server_time_ = ota.HasServerTime();
+     if (protocol_started) {
+-        std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
+-        display->ShowNotification(message.c_str());
+-        display->SetChatMessage("system", "");
++        // std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
++        // display->ShowNotification(message.c_str());
++        // display->SetChatMessage("system", "");
+         // Play the success sound to indicate the device is ready
+         audio_service_.PlaySound(Lang::Sounds::P3_SUCCESS);
+     }
+@@ -512,8 +519,8 @@ void Application::Start() {
+ void Application::OnClockTimer() {
+     clock_ticks_++;
+ 
+-    auto display = Board::GetInstance().GetDisplay();
+-    display->UpdateStatusBar();
++    // auto display = Board::GetInstance().GetDisplay();
++    // display->UpdateStatusBar();
+ 
+     // Print the debug info every 10 seconds
+     if (clock_ticks_ % 10 == 0) {
+@@ -643,25 +650,33 @@ void Application::SetDeviceState(DeviceState state) {
+     DeviceStateEventManager::GetInstance().PostStateChangeEvent(previous_state, state);
+ 
+     auto& board = Board::GetInstance();
+-    auto display = board.GetDisplay();
++    // auto display = board.GetDisplay();
+     auto led = board.GetLed();
+     led->OnStateChanged();
+     switch (state) {
+         case kDeviceStateUnknown:
+         case kDeviceStateIdle:
+-            display->SetStatus(Lang::Strings::STANDBY);
+-            display->SetEmotion("neutral");
++            // if(display) {
++            //     display->SetStatus(Lang::Strings::STANDBY);
++            //     display->SetEmotion("neutral");
++            // }
+             audio_service_.EnableVoiceProcessing(false);
+             audio_service_.EnableWakeWordDetection(true);
+             break;
+         case kDeviceStateConnecting:
+-            display->SetStatus(Lang::Strings::CONNECTING);
+-            display->SetEmotion("neutral");
+-            display->SetChatMessage("system", "");
++            // if (display) {
++            //     display->SetStatus(Lang::Strings::CONNECTING);
++            //     display->SetEmotion("neutral");
++            // }
++            // if (display) {
++            //     display->SetChatMessage("system", "");
++            // }
+             break;
+         case kDeviceStateListening:
+-            display->SetStatus(Lang::Strings::LISTENING);
+-            display->SetEmotion("neutral");
++            // if (display) {
++            //     display->SetStatus(Lang::Strings::LISTENING);
++            //     display->SetEmotion("neutral");
++            // }
+ 
+             // Make sure the audio processor is running
+             if (!audio_service_.IsAudioProcessorRunning()) {
+@@ -672,7 +687,9 @@ void Application::SetDeviceState(DeviceState state) {
+             }
+             break;
+         case kDeviceStateSpeaking:
+-            display->SetStatus(Lang::Strings::SPEAKING);
++            // if (display) {
++            //     display->SetStatus(Lang::Strings::SPEAKING);
++            // }
+ 
+             if (listening_mode_ != kListeningModeRealtime) {
+                 audio_service_.EnableVoiceProcessing(false);
+@@ -746,19 +763,19 @@ void Application::SetAecMode(AecMode mode) {
+     aec_mode_ = mode;
+     Schedule([this]() {
+         auto& board = Board::GetInstance();
+-        auto display = board.GetDisplay();
++        // auto display = board.GetDisplay();
+         switch (aec_mode_) {
+         case kAecOff:
+             audio_service_.EnableDeviceAec(false);
+-            display->ShowNotification(Lang::Strings::RTC_MODE_OFF);
++            // display->ShowNotification(Lang::Strings::RTC_MODE_OFF);
+             break;
+         case kAecOnServerSide:
+             audio_service_.EnableDeviceAec(false);
+-            display->ShowNotification(Lang::Strings::RTC_MODE_ON);
++            // display->ShowNotification(Lang::Strings::RTC_MODE_ON);
+             break;
+         case kAecOnDeviceSide:
+             audio_service_.EnableDeviceAec(true);
+-            display->ShowNotification(Lang::Strings::RTC_MODE_ON);
++            // display->ShowNotification(Lang::Strings::RTC_MODE_ON);
+             break;
+         }
+ 
+@@ -771,4 +788,4 @@ void Application::SetAecMode(AecMode mode) {
+ 
+ void Application::PlaySound(const std::string_view& sound) {
+     audio_service_.PlaySound(sound);
+-}
+\ No newline at end of file
++}
+diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
+index 92ce68a..2f28f35 100644
+--- a/main/boards/common/wifi_board.cc
++++ b/main/boards/common/wifi_board.cc
+@@ -38,7 +38,7 @@ void WifiBoard::EnterWifiConfigMode() {
+ 
+     auto& wifi_ap = WifiConfigurationAp::GetInstance();
+     wifi_ap.SetLanguage(Lang::CODE);
+-    wifi_ap.SetSsidPrefix("Xiaozhi");
++    wifi_ap.SetSsidPrefix("BYE");
+     wifi_ap.Start();
+ 
+     // 显示 WiFi 配置 AP 的 SSID 和 Web 服务器 URL
+@@ -82,21 +82,21 @@ void WifiBoard::StartNetwork() {
+ 
+     auto& wifi_station = WifiStation::GetInstance();
+     wifi_station.OnScanBegin([this]() {
+-        auto display = Board::GetInstance().GetDisplay();
+-        display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000);
++        // auto display = Board::GetInstance().GetDisplay();
++        // display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000);
+     });
+     wifi_station.OnConnect([this](const std::string& ssid) {
+-        auto display = Board::GetInstance().GetDisplay();
+-        std::string notification = Lang::Strings::CONNECT_TO;
+-        notification += ssid;
+-        notification += "...";
+-        display->ShowNotification(notification.c_str(), 30000);
++        // auto display = Board::GetInstance().GetDisplay();
++        // std::string notification = Lang::Strings::CONNECT_TO;
++        // notification += ssid;
++        // notification += "...";
++        // display->ShowNotification(notification.c_str(), 30000);
+     });
+     wifi_station.OnConnected([this](const std::string& ssid) {
+-        auto display = Board::GetInstance().GetDisplay();
+-        std::string notification = Lang::Strings::CONNECTED_TO;
+-        notification += ssid;
+-        display->ShowNotification(notification.c_str(), 30000);
++        // auto display = Board::GetInstance().GetDisplay();
++        // std::string notification = Lang::Strings::CONNECTED_TO;
++        // notification += ssid;
++        // display->ShowNotification(notification.c_str(), 30000);
+     });
+     wifi_station.Start();
+ 
+@@ -160,7 +160,7 @@ void WifiBoard::ResetWifiConfiguration() {
+         Settings settings("wifi", true);
+         settings.SetInt("force_ap", 1);
+     }
+-    GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
++    // GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
+     vTaskDelay(pdMS_TO_TICKS(1000));
+     // Reboot the device
+     esp_restart();
+diff --git a/main/boards/esp32-s3-bye/config.h b/main/boards/esp32-s3-bye/config.h
+new file mode 100644
+index 0000000..1aed8b1
+--- /dev/null
++++ b/main/boards/esp32-s3-bye/config.h
+@@ -0,0 +1,21 @@
++#ifndef _BOARD_CONFIG_H_
++#define _BOARD_CONFIG_H_
++
++#include <driver/gpio.h>
++
++#define AUDIO_INPUT_SAMPLE_RATE  16000
++#define AUDIO_OUTPUT_SAMPLE_RATE 24000
++
++#define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_3
++#define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_4
++#define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_1
++#define AUDIO_I2S_MIC_GPIO_LR   GPIO_NUM_2
++
++#define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_10
++#define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_9
++#define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_8
++
++#define BUILTIN_LED_GPIO        GPIO_NUM_48
++#define BOOT_BUTTON_GPIO        GPIO_NUM_0
++
++#endif // _BOARD_CONFIG_H_
+diff --git a/main/boards/esp32-s3-bye/esp32_s3_bye_board.cc b/main/boards/esp32-s3-bye/esp32_s3_bye_board.cc
+new file mode 100644
+index 0000000..b0d381f
+--- /dev/null
++++ b/main/boards/esp32-s3-bye/esp32_s3_bye_board.cc
+@@ -0,0 +1,61 @@
++#include "wifi_board.h"
++#include "codecs/no_audio_codec.h"
++#include "display/oled_display.h"
++#include "system_reset.h"
++#include "application.h"
++#include "button.h"
++#include "config.h"
++#include "mcp_server.h"
++#include "lamp_controller.h"
++#include "led/single_led.h"
++#include <wifi_station.h>
++#include <esp_log.h>
++#include <driver/gpio.h>
++
++#define TAG "BYEBoard"
++
++class BYEBoard : public WifiBoard {
++private:
++    Button boot_button_;
++
++    void InitializeButtons() {
++        boot_button_.OnClick([this]() {
++            auto& app = Application::GetInstance();
++            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
++                ResetWifiConfiguration();
++            }
++            app.ToggleChatState();
++        });
++    }
++
++public:
++    BYEBoard():
++        boot_button_(BOOT_BUTTON_GPIO) {
++        InitializeButtons();
++
++        gpio_config_t io_conf = {};
++        io_conf.intr_type = GPIO_INTR_DISABLE;
++        io_conf.mode = GPIO_MODE_OUTPUT;
++        io_conf.pin_bit_mask = 1ULL << AUDIO_I2S_MIC_GPIO_LR;
++        io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
++        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
++        gpio_config(&io_conf);
++    }
++
++    virtual Led* GetLed() override {
++        static SingleLed led(BUILTIN_LED_GPIO);
++        return &led;
++    }
++
++    virtual AudioCodec* GetAudioCodec() override {
++        static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
++            AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
++        return &audio_codec;
++    }
++
++    virtual Display* GetDisplay() override {
++        return nullptr;
++    }
++};
++
++DECLARE_BOARD(BYEBoard);
+diff --git a/main/main.cc b/main/main.cc
+index cc03cbd..0ba0a15 100755
+--- a/main/main.cc
++++ b/main/main.cc
+@@ -10,8 +10,118 @@
+ 
+ #define TAG "main"
+ 
++#define ARRAY_SIZE_OFFSET   5   //Increase this if print_real_time_stats returns ESP_ERR_INVALID_SIZE
++
++static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
++{
++    TaskStatus_t *start_array = NULL, *end_array = NULL;
++    UBaseType_t start_array_size, end_array_size;
++    configRUN_TIME_COUNTER_TYPE start_run_time, end_run_time;
++    esp_err_t ret;
++
++    //Allocate array to store current task states
++    start_array_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
++    start_array = (TaskStatus_t*)malloc(sizeof(TaskStatus_t) * start_array_size);
++    if (start_array == NULL) {
++        ret = ESP_ERR_NO_MEM;
++    free(start_array);
++    free(end_array);
++    return ret;
++    }
++    //Get current task states
++    start_array_size = uxTaskGetSystemState(start_array, start_array_size, &start_run_time);
++    if (start_array_size == 0) {
++        ret = ESP_ERR_INVALID_SIZE;
++    free(start_array);
++    free(end_array);
++    return ret;
++    }
++
++    vTaskDelay(xTicksToWait);
++
++    //Allocate array to store tasks states post delay
++    end_array_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
++    end_array = (TaskStatus_t*)malloc(sizeof(TaskStatus_t) * end_array_size);
++    if (end_array == NULL) {
++        ret = ESP_ERR_NO_MEM;
++    free(start_array);
++    free(end_array);
++    return ret;
++    }
++    //Get post delay task states
++    end_array_size = uxTaskGetSystemState(end_array, end_array_size, &end_run_time);
++    if (end_array_size == 0) {
++        ret = ESP_ERR_INVALID_SIZE;
++    free(start_array);
++    free(end_array);
++    return ret;
++    }
++
++    //Calculate total_elapsed_time in units of run time stats clock period.
++    uint32_t total_elapsed_time = (end_run_time - start_run_time);
++    if (total_elapsed_time == 0) {
++        ret = ESP_ERR_INVALID_STATE;
++    free(start_array);
++    free(end_array);
++    return ret;
++    }
++
++    printf("| Task | Run Time | Percentage\n");
++    //Match each task in start_array to those in the end_array
++    for (int i = 0; i < start_array_size; i++) {
++        int k = -1;
++        for (int j = 0; j < end_array_size; j++) {
++            if (start_array[i].xHandle == end_array[j].xHandle) {
++                k = j;
++                //Mark that task have been matched by overwriting their handles
++                start_array[i].xHandle = NULL;
++                end_array[j].xHandle = NULL;
++                break;
++            }
++        }
++        //Check if matching task found
++        if (k >= 0) {
++            uint32_t task_elapsed_time = end_array[k].ulRunTimeCounter - start_array[i].ulRunTimeCounter;
++            uint32_t percentage_time = (task_elapsed_time * 100UL) / (total_elapsed_time * CONFIG_FREERTOS_NUMBER_OF_CORES);
++            printf("| %s | %"PRIu32" | %"PRIu32"%%\n", start_array[i].pcTaskName, task_elapsed_time, percentage_time);
++        }
++    }
++
++    //Print unmatched tasks
++    for (int i = 0; i < start_array_size; i++) {
++        if (start_array[i].xHandle != NULL) {
++            printf("| %s | Deleted\n", start_array[i].pcTaskName);
++        }
++    }
++    for (int i = 0; i < end_array_size; i++) {
++        if (end_array[i].xHandle != NULL) {
++            printf("| %s | Created\n", end_array[i].pcTaskName);
++        }
++    }
++    ret = ESP_OK;
++    free(start_array);
++    free(end_array);
++    return ret;
++}
++
++static void stats_task(void *arg)
++{
++    //Print real time stats periodically
++    while (1) {
++        printf("\n\nGetting real time stats over %"PRIu32" ticks\n", pdMS_TO_TICKS(1000));
++        if (print_real_time_stats(pdMS_TO_TICKS(1000)) == ESP_OK) {
++            printf("Real time stats obtained\n");
++        } else {
++            printf("Error getting real time stats\n");
++        }
++        vTaskDelay(pdMS_TO_TICKS(1000));
++    }
++}
++
+ extern "C" void app_main(void)
+ {
++    xTaskCreatePinnedToCore(stats_task, "stats", 4096, NULL, 3, NULL, tskNO_AFFINITY);
++
+     // Initialize the default event loop
+     ESP_ERROR_CHECK(esp_event_loop_create_default());
+ 
+diff --git a/main/modules/bye.cc b/main/modules/bye.cc
+new file mode 100644
+index 0000000..0a6b7ef
+--- /dev/null
++++ b/main/modules/bye.cc
+@@ -0,0 +1,269 @@
++#include "bye.h"
++#include "pet.h"
++#include "led_matrix.h"
++#include "esp_log.h"
++#include "driver/gpio.h"
++#include "mcp_server.h"
++#include "settings.h"
++#include "esp_check.h"
++#include "cJSON.h"
++#include <sstream>
++
++static const char *TAG = "BYE";
++
++BYE& BYE::get_instance() {
++    static BYE instance;
++    return instance;
++}
++
++BYE::BYE() : mqtt_ctl_(nullptr), pet_(nullptr) {
++    // Private constructor
++}
++
++BYE::~BYE() {
++    // Private destructor
++}
++
++esp_err_t BYE::init() {
++    ESP_LOGI(TAG, "Initializing all modules...");
++
++    esp_err_t ret = ESP_OK;
++
++    // Initialize Pet
++    pet_ = std::make_unique<Pet>();
++    ret = pet_->init();
++    if (ret != ESP_OK) {
++        ESP_LOGE(TAG, "Failed to initialize Pet");
++        return ret;
++    }
++    ESP_LOGI(TAG, "Pet initialized successfully");
++
++    // Initialize Lamp
++    ESP_RETURN_ON_ERROR(lamp_init(), TAG, "Failed to initialize Lamp");
++    ESP_LOGI(TAG, "Lamp initialized successfully");
++
++    Settings settings("mqtt_ctl", false);
++    base_topic_ = settings.GetString("base_topic", "xiaozhi");
++
++    // Initialize MCP Tools
++    auto& mcp_server = McpServer::GetInstance();
++    mcp_server.AddTool("self.light.set_brightness", "设置探路灯的亮度", PropertyList({
++        Property("brightness", kPropertyTypeInteger, 0, 100)
++    }), [this](const PropertyList& properties) -> ReturnValue {
++        int brightness = properties["brightness"].value<int>();
++        this->SetBrightness(brightness);
++        return true;
++    });
++
++    mcp_server.AddTool("self.light.get_brightness", "获取探路灯的亮度", PropertyList(), [](const PropertyList& properties) -> ReturnValue {
++        return std::to_string(lamp_get_brightness());
++    });
++
++    mcp_server.AddTool("self.matrix.list_animate", "列出当前LED矩阵可用的动画", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
++        return this->GetAnimationsAsJson();
++    });
++
++    mcp_server.AddTool("self.matrix.set_animate", "设置当前 LED 矩阵的动画", PropertyList({
++        Property("name", kPropertyTypeString),
++    }), [this](const PropertyList& properties) -> ReturnValue {
++        std::string animation_name = properties["name"].value<std::string>();
++        this->SetAnimation(animation_name);
++        return true;
++    });
++
++    mcp_server.AddTool("self.matrix.get_animate", "获取当前LED矩阵的动画", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
++        std::string current_anim_id = pet_->get_current_animation_id();
++        auto animations = pet_->get_animations();
++        for (const auto& anim : animations) {
++            if (anim.id == current_anim_id) {
++                cJSON *root = cJSON_CreateObject();
++                cJSON_AddStringToObject(root, "name", anim.id.c_str());
++                cJSON_AddStringToObject(root, "description", anim.description.c_str());
++                char *json_string = cJSON_Print(root);
++                std::string result = json_string;
++                cJSON_Delete(root);
++                free(json_string);
++                return result;
++            }
++        }
++        return "{}";
++    });
++
++    ESP_LOGI(TAG, "All modules initialized successfully");
++    return ESP_OK;
++}
++
++void BYE::connect()
++{
++    // Initialize MQTT
++    mqtt_ctl_ = std::make_unique<MqttCtl>();
++    MqttCtlCallbacks mqtt_callbacks;
++    mqtt_callbacks.on_connected = [this]() { this->MqttConnected(); };
++    mqtt_callbacks.on_message = [this](const std::string& topic, const std::string& payload) { this->MqttMessageReceived(topic, payload); };
++    if (mqtt_ctl_->Connect(mqtt_callbacks) != ESP_OK) {
++        ESP_LOGE(TAG, "Failed to connect MQTT");
++    }
++}
++
++void BYE::MqttConnected() {
++    mqtt_ctl_->Subscribe(base_topic_ + "/light/brightness/set");
++    mqtt_ctl_->Subscribe(base_topic_ + "/animate/set");
++    mqtt_ctl_->Subscribe(base_topic_ + "/animate/list/set");
++
++    ESP_LOGI(TAG, "Publishing initial status...");
++    // Publish brightness
++    mqtt_ctl_->Publish(base_topic_ + "/light/brightness", std::to_string(lamp_get_brightness()));
++    // Publish current animation
++    if (pet_) {
++        mqtt_ctl_->Publish(base_topic_ + "/animate", pet_->get_current_animation_id());
++    }
++    // Publish animation list
++    if (mqtt_ctl_) {
++        mqtt_ctl_->Publish(base_topic_ + "/animate/list", GetAnimationsAsJson());
++    }
++}
++
++void BYE::MqttMessageReceived(const std::string& topic, const std::string& payload) {
++    ESP_LOGI(TAG, "TOPIC=%s", topic.c_str());
++    ESP_LOGI(TAG, "DATA=%s", payload.c_str());
++
++    if (topic == base_topic_ + "/light/brightness/set") {
++        ESP_LOGI(TAG, "Setting brightness: %s", payload.c_str());
++        int brightness = std::stoi(payload);
++        SetBrightness(brightness);
++    } else if (topic == base_topic_ + "/animate/set") {
++        ESP_LOGI(TAG, "Setting animation: %s", payload.c_str());
++        SetAnimation(payload);
++    } else if (topic == base_topic_ + "/animate/list/set") {
++        ESP_LOGI(TAG, "Setting animation list");
++        SetAnimationList(payload);
++    }
++}
++
++void BYE::SetBrightness(int brightness) {
++    lamp_set_brightness(brightness);
++    if (mqtt_ctl_) {
++        mqtt_ctl_->Publish(base_topic_ + "/light/brightness", std::to_string(lamp_get_brightness()));
++    }
++}
++
++void BYE::SetAnimation(const std::string& id) {
++    if (pet_) {
++        pet_->set_current_animation(id);
++        if (mqtt_ctl_) {
++            mqtt_ctl_->Publish(base_topic_ + "/animate", pet_->get_current_animation_id());
++        }
++    }
++}
++
++void BYE::SetAnimationList(const std::string& payload) {
++    if (pet_) {
++        cJSON *root = cJSON_Parse(payload.c_str());
++        if (root) {
++            // Check if the payload is a single animation object or a list of animations
++            if (cJSON_IsObject(root) && cJSON_HasObjectItem(root, "name")) {
++                // Single animation object
++                std::vector<Pet::Animation> animations;
++                Pet::Animation anim;
++                anim.id = cJSON_GetObjectItem(root, "name")->valuestring;
++                
++                cJSON *desc_item = cJSON_GetObjectItem(root, "description");
++                if (desc_item) {
++                    anim.description = desc_item->valuestring;
++                } else {
++                    anim.description = "";
++                }
++                
++                anim.fps = cJSON_GetObjectItem(root, "fps")->valueint;
++
++                cJSON *json_frames = cJSON_GetObjectItem(root, "frames");
++                if (cJSON_IsArray(json_frames)) {
++                    for (int j = 0; j < cJSON_GetArraySize(json_frames); j++) {
++                        cJSON *json_frame_str = cJSON_GetArrayItem(json_frames, j);
++                        if (cJSON_IsString(json_frame_str)) {
++                            Pet::Frame frame;
++                            std::string frame_str = json_frame_str->valuestring;
++                            std::stringstream ss(frame_str);
++                            std::string byte_str;
++                            int k = 0;
++                            while(std::getline(ss, byte_str, ',') && k < 8) {
++                                frame.data[k++] = std::stoul(byte_str, nullptr, 2);
++                            }
++                            anim.frames.push_back(frame);
++                        }
++                    }
++                }
++                animations.push_back(anim);
++                pet_->set_animations(animations);
++
++            } else {
++                cJSON *json_animations = cJSON_GetObjectItem(root, "animations");
++                if (cJSON_IsArray(json_animations)) {
++                    std::vector<Pet::Animation> animations;
++                    for (int i = 0; i < cJSON_GetArraySize(json_animations); i++) {
++                        cJSON *json_anim = cJSON_GetArrayItem(json_animations, i);
++                        Pet::Animation anim;
++                        anim.id = cJSON_GetObjectItem(json_anim, "name")->valuestring;
++                        
++                        cJSON *desc_item = cJSON_GetObjectItem(json_anim, "description");
++                        if (desc_item) {
++                            anim.description = desc_item->valuestring;
++                        } else {
++                            anim.description = "";
++                        }
++
++                        anim.fps = cJSON_GetObjectItem(json_anim, "fps")->valueint;
++                        
++                        cJSON *json_frames = cJSON_GetObjectItem(json_anim, "frames");
++                        if (cJSON_IsArray(json_frames)) {
++                            for (int j = 0; j < cJSON_GetArraySize(json_frames); j++) {
++                                cJSON *json_frame_str = cJSON_GetArrayItem(json_frames, j);
++                                if (cJSON_IsString(json_frame_str)) {
++                                    Pet::Frame frame;
++                                    std::string frame_str = json_frame_str->valuestring;
++                                    std::stringstream ss(frame_str);
++                                    std::string byte_str;
++                                    int k = 0;
++                                    while(std::getline(ss, byte_str, ',') && k < 8) {
++                                        frame.data[k++] = std::stoul(byte_str, nullptr, 2);
++                                    }
++                                    anim.frames.push_back(frame);
++                                }
++                            }
++                        }
++                        animations.push_back(anim);
++                    }
++                    pet_->set_animations(animations);
++                }
++            }
++
++            if (mqtt_ctl_) {
++                mqtt_ctl_->Publish(base_topic_ + "/animate/list", GetAnimationsAsJson());
++            }
++            cJSON_Delete(root);
++        }
++    }
++}
++
++std::string BYE::GetAnimationsAsJson() {
++    std::string result = "[]";
++    if (pet_) {
++        auto animations = pet_->get_animations();
++        cJSON *root = cJSON_CreateObject();
++        cJSON *json_animations = cJSON_CreateArray();
++        cJSON_AddItemToObject(root, "animations", json_animations);
++
++        for (const auto& anim : animations) {
++            cJSON *json_anim = cJSON_CreateObject();
++            cJSON_AddStringToObject(json_anim, "name", anim.id.c_str());
++            cJSON_AddStringToObject(json_anim, "description", anim.description.c_str());
++            cJSON_AddItemToArray(json_animations, json_anim);
++        }
++
++        char *json_string = cJSON_Print(root);
++        result = json_string;
++        cJSON_Delete(root);
++        free(json_string);
++    }
++    return result;
++}
+diff --git a/main/modules/bye.h b/main/modules/bye.h
+new file mode 100644
+index 0000000..fe2dfd0
+--- /dev/null
++++ b/main/modules/bye.h
+@@ -0,0 +1,40 @@
++#ifndef __BYE_H__
++#define __BYE_H__
++
++#include "esp_err.h"
++#include "modules/mqtt_ctl.h"
++#include "modules/pet.h"
++#include "modules/lamp.h"
++#include <memory>
++
++class BYE {
++public:
++    // Get the singleton instance
++    static BYE& get_instance();
++
++    // Delete copy constructor and assignment operator
++    BYE(const BYE&) = delete;
++    void operator=(const BYE&) = delete;
++
++    // Public API
++    esp_err_t init();
++    void connect();
++
++private:
++    // Private constructor for singleton
++    BYE();
++    ~BYE();
++
++    void SetBrightness(int brightness);
++    void SetAnimation(const std::string& id);
++    void SetAnimationList(const std::string& payload);
++    std::string GetAnimationsAsJson();
++    void MqttConnected();
++    void MqttMessageReceived(const std::string& topic, const std::string& payload);
++
++    std::unique_ptr<MqttCtl> mqtt_ctl_;
++    std::unique_ptr<Pet> pet_;
++    std::string base_topic_;
++};
++
++#endif // __BYE_H__
+diff --git a/main/modules/lamp.c b/main/modules/lamp.c
+new file mode 100644
+index 0000000..adf5a4a
+--- /dev/null
++++ b/main/modules/lamp.c
+@@ -0,0 +1,71 @@
++#include "modules/lamp.h"
++#include "driver/ledc.h"
++#include "esp_log.h"
++#include "esp_check.h"
++
++// Define the GPIO pin for the LED
++#define LED_PIN 13
++
++// LEDC Configuration
++#define LEDC_TIMER              LEDC_TIMER_0
++#define LEDC_MODE               LEDC_LOW_SPEED_MODE
++#define LEDC_CHANNEL            LEDC_CHANNEL_0
++#define LEDC_DUTY_RES           LEDC_TIMER_10_BIT // Set duty resolution to 10 bits (0-1023)
++#define LEDC_FREQUENCY          (5000) // Frequency in Hertz
++
++static const char *TAG = "lamp";
++
++static int g_brightness = 0;
++
++esp_err_t lamp_init(void)
++{
++    // Prepare and then apply the LEDC PWM timer configuration
++    ledc_timer_config_t ledc_timer = {
++        .speed_mode       = LEDC_MODE,
++        .timer_num        = LEDC_TIMER,
++        .duty_resolution  = LEDC_DUTY_RES,
++        .freq_hz          = LEDC_FREQUENCY,
++        .clk_cfg          = LEDC_AUTO_CLK
++    };
++    ESP_RETURN_ON_ERROR(ledc_timer_config(&ledc_timer), TAG, "ledc_timer_config failed");
++
++    // Prepare and then apply the LEDC PWM channel configuration
++    ledc_channel_config_t ledc_channel = {
++        .speed_mode     = LEDC_MODE,
++        .channel        = LEDC_CHANNEL,
++        .timer_sel      = LEDC_TIMER,
++        .intr_type      = LEDC_INTR_DISABLE,
++        .gpio_num       = LED_PIN,
++        .duty           = 0, // Set initial duty to 0
++        .hpoint         = 0
++    };
++    ESP_RETURN_ON_ERROR(ledc_channel_config(&ledc_channel), TAG, "ledc_channel_config failed");
++
++    ESP_LOGI(TAG, "Lamp initialized on GPIO %d", LED_PIN);
++    return ESP_OK;
++}
++
++void lamp_set_brightness(int brightness)
++{
++    if (brightness < 0) {
++        brightness = 0;
++    }
++    if (brightness > 100) {
++        brightness = 100;
++    }
++
++    // Calculate duty cycle from brightness percentage
++    // With 10-bit resolution, max duty is 1023
++    uint32_t duty = (1023 * brightness) / 100;
++
++    // Set duty and update
++    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty));
++    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
++    g_brightness = brightness;
++    ESP_LOGD(TAG, "Set brightness to %d%%, duty: %d", brightness, (int)duty);
++}
++
++int lamp_get_brightness(void)
++{
++    return g_brightness;
++}
+diff --git a/main/modules/lamp.h b/main/modules/lamp.h
+new file mode 100644
+index 0000000..c0b5d82
+--- /dev/null
++++ b/main/modules/lamp.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#include "esp_err.h"
++
++/**
++ * @brief Initialize the LED lamp module.
++ *
++ * This function initializes the GPIO and LEDC timer for PWM control.
++ *
++ * @return esp_err_t ESP_OK on success, or an error code on failure.
++ */
++esp_err_t lamp_init(void);
++
++/**
++ * @brief Set the brightness of the LED lamp.
++ *
++ * @param brightness The brightness level, from 0 (off) to 100 (full brightness).
++ */
++void lamp_set_brightness(int brightness);
++
++/**
++ * @brief Get the current brightness of the LED lamp.
++ *
++ * @return The current brightness level, from 0 to 100.
++ */
++int lamp_get_brightness(void);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/main/modules/led_matrix.c b/main/modules/led_matrix.c
+new file mode 100644
+index 0000000..51751c4
+--- /dev/null
++++ b/main/modules/led_matrix.c
+@@ -0,0 +1,48 @@
++#include "led_matrix.h"
++#include "driver/uart.h"
++#include "driver/gpio.h"
++#include "esp_log.h"
++#include "esp_err.h"
++#include <stdio.h>
++
++#define MATRIX_UART_NUM         UART_NUM_2
++#define MATRIX_GPIO_TX          GPIO_NUM_5
++#define MATRIX_UART_BUF_SIZE    (256)
++
++static const char *TAG = "led_matrix";
++
++esp_err_t matrix_init(void)
++{
++    uart_config_t uart_config = {
++        .baud_rate = 9600,
++        .data_bits = UART_DATA_8_BITS,
++        .parity    = UART_PARITY_DISABLE,
++        .stop_bits = UART_STOP_BITS_1,
++        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
++        .source_clk = UART_SCLK_DEFAULT,
++    };
++    int intr_alloc_flags = 0;
++
++    ESP_ERROR_CHECK(uart_driver_install(MATRIX_UART_NUM, MATRIX_UART_BUF_SIZE * 2, 0, 0, NULL, intr_alloc_flags));
++    ESP_ERROR_CHECK(uart_param_config(MATRIX_UART_NUM, &uart_config));
++    ESP_ERROR_CHECK(uart_set_pin(MATRIX_UART_NUM, MATRIX_GPIO_TX, -1, -1, -1));
++
++    return ESP_OK;
++}
++
++esp_err_t matrix_set_pattern(const uint8_t pattern[8])
++{
++    char hex_buffer[17];
++    for (int i = 0; i < 8; i++) {
++        sprintf(&hex_buffer[i * 2], "%02x", pattern[i]);
++    }
++    uart_write_bytes(MATRIX_UART_NUM, hex_buffer, 16);
++    uart_write_bytes(MATRIX_UART_NUM, "\n", 1);
++    return ESP_OK;
++}
++
++esp_err_t matrix_set_intensity(uint8_t intensity)
++{
++    (void)intensity; // Unused parameter
++    return ESP_OK;
++}
+diff --git a/main/modules/led_matrix.h b/main/modules/led_matrix.h
+new file mode 100644
+index 0000000..3e09955
+--- /dev/null
++++ b/main/modules/led_matrix.h
+@@ -0,0 +1,20 @@
++#ifndef __LED_MATRIX_H__
++#define __LED_MATRIX_H__
++
++#include <stdint.h>
++
++#include "esp_err.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++esp_err_t matrix_init(void);
++esp_err_t matrix_set_pattern(const uint8_t pattern[8]);
++esp_err_t matrix_set_intensity(uint8_t intensity);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/main/modules/mqtt_ctl.cc b/main/modules/mqtt_ctl.cc
+new file mode 100644
+index 0000000..e222f65
+--- /dev/null
++++ b/main/modules/mqtt_ctl.cc
+@@ -0,0 +1,112 @@
++#include "mqtt_ctl.h"
++#include "settings.h"
++#include "system_info.h"
++#include "board.h"
++
++#include <esp_log.h>
++#include "mqtt_client.h"
++
++#define TAG "MqttCtl"
++
++static void log_error_if_nonzero(const char *message, int error_code)
++{
++    if (error_code != 0) {
++        ESP_LOGE(TAG, "Last error %s: 0x%x", message, error_code);
++    }
++}
++
++void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
++{
++    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%ld", base, event_id);
++    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
++    MqttCtl* mqtt_ctl = (MqttCtl*)handler_args;
++    //esp_mqtt_client_handle_t client = event->client;
++    //int msg_id;
++    switch ((esp_mqtt_event_id_t)event_id) {
++    case MQTT_EVENT_CONNECTED:
++        ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
++        if (mqtt_ctl->callbacks_.on_connected) {
++            mqtt_ctl->callbacks_.on_connected();
++        }
++        break;
++    case MQTT_EVENT_DISCONNECTED:
++        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
++        break;
++    case MQTT_EVENT_SUBSCRIBED:
++        ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
++        break;
++    case MQTT_EVENT_UNSUBSCRIBED:
++        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
++        break;
++    case MQTT_EVENT_PUBLISHED:
++        ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
++        break;
++    case MQTT_EVENT_DATA:
++        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
++        if (mqtt_ctl->callbacks_.on_message) {
++            mqtt_ctl->callbacks_.on_message(std::string(event->topic, event->topic_len), std::string(event->data, event->data_len));
++        }
++        break;
++    case MQTT_EVENT_ERROR:
++        ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
++        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
++            log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
++            log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
++            log_error_if_nonzero("captured as transport's socket errno",  event->error_handle->esp_transport_sock_errno);
++            ESP_LOGI(TAG, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
++        }
++        break;
++    default:
++        ESP_LOGI(TAG, "Other event id:%d", event->event_id);
++        break;
++    }
++}
++
++MqttCtl::MqttCtl() {
++}
++
++MqttCtl::~MqttCtl() {
++}
++
++esp_err_t MqttCtl::Connect(const MqttCtlCallbacks& callbacks) {
++    callbacks_ = callbacks;
++    Settings settings("mqtt_ctl", false);
++    std::string uri = settings.GetString("uri");
++    std::string username = settings.GetString("username");
++    std::string password = settings.GetString("password");
++    std::string client_id = settings.GetString("client_id");
++
++    if (uri.empty()) {
++        ESP_LOGE(TAG, "MQTT URI is not set");
++        return ESP_FAIL;
++    }
++
++    esp_mqtt_client_config_t mqtt_cfg = {};
++    mqtt_cfg.broker.address.uri = uri.c_str();
++    if (!username.empty()) {
++        mqtt_cfg.credentials.username = username.c_str();
++    }
++    if (!password.empty()) {
++        mqtt_cfg.credentials.authentication.password = password.c_str();
++    }
++    if (!client_id.empty()) {
++        mqtt_cfg.credentials.client_id = client_id.c_str();
++    }
++
++    client_ = esp_mqtt_client_init(&mqtt_cfg);
++    if (client_ == NULL) {
++        ESP_LOGE(TAG, "Failed to init mqtt client");
++        return ESP_FAIL;
++    }
++    esp_mqtt_client_register_event(client_, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler, this);
++    esp_mqtt_client_start(client_);
++    return ESP_OK;
++}
++
++void MqttCtl::Subscribe(const std::string& topic) {
++    esp_mqtt_client_subscribe(client_, topic.c_str(), 0);
++}
++
++void MqttCtl::Publish(const std::string& topic, const std::string& payload) {
++    esp_mqtt_client_publish(client_, topic.c_str(), payload.c_str(), 0, 0, 0);
++}
+diff --git a/main/modules/mqtt_ctl.h b/main/modules/mqtt_ctl.h
+new file mode 100644
+index 0000000..a92935f
+--- /dev/null
++++ b/main/modules/mqtt_ctl.h
+@@ -0,0 +1,29 @@
++#ifndef _MQTT_CTL_H
++#define _MQTT_CTL_H
++
++#include <functional>
++#include <string>
++#include "esp_err.h"
++#include "mqtt_client.h"
++
++struct MqttCtlCallbacks {
++    std::function<void()> on_connected;
++    std::function<void(const std::string& topic, const std::string& payload)> on_message;
++};
++
++class MqttCtl {
++    friend void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
++public:
++    MqttCtl();
++    ~MqttCtl();
++
++    esp_err_t Connect(const MqttCtlCallbacks& callbacks);
++    void Subscribe(const std::string& topic);
++    void Publish(const std::string& topic, const std::string& payload);
++
++private:
++    esp_mqtt_client_handle_t client_ = nullptr;
++    MqttCtlCallbacks callbacks_;
++};
++
++#endif // _MQTT_CTL_H
+diff --git a/main/modules/pet.cc b/main/modules/pet.cc
+new file mode 100644
+index 0000000..670ab73
+--- /dev/null
++++ b/main/modules/pet.cc
+@@ -0,0 +1,147 @@
++#include "pet.h"
++#include "led_matrix.h"
++#include "esp_log.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include <algorithm>
++#include <chrono>
++
++static const char *TAG = "Pet";
++
++// Static task launcher to call a class member function
++static void animation_task_wrapper(void *arg) {
++    Pet *pet_instance = static_cast<Pet*>(arg);
++    pet_instance->animation_task();
++    vTaskDelete(NULL);
++}
++
++Pet::Pet() : 
++    current_animation_id_(""), 
++    running_(false), 
++    task_handle_(nullptr) {
++}
++
++Pet::~Pet() {
++    if (running_) {
++        {
++            std::lock_guard<std::mutex> lock(mutex_);
++            running_ = false;
++        }
++        cv_.notify_one();
++        // Wait for the task to finish, or delete it if necessary
++        // vTaskDelete is a forceful way, but ensures cleanup
++        if (task_handle_ != nullptr) {
++            vTaskDelete(static_cast<TaskHandle_t>(task_handle_));
++        }
++    }
++}
++
++esp_err_t Pet::init() {
++    esp_err_t ret = matrix_init();
++    if (ret != ESP_OK) {
++        ESP_LOGE(TAG, "Failed to initialize LED matrix");
++        return ret;
++    }
++
++    running_ = true;
++    BaseType_t result = xTaskCreate(
++        animation_task_wrapper, 
++        "pet_animation_task", 
++        4096, 
++        this, 
++        5, 
++        &task_handle_
++    );
++
++    if (result != pdPASS) {
++        ESP_LOGE(TAG, "Failed to create animation task");
++        running_ = false;
++        return ESP_FAIL;
++    }
++
++    ESP_LOGI(TAG, "Pet module initialized");
++    return ESP_OK;
++}
++
++void Pet::animation_task() {
++    int current_frame_index = 0;
++    std::string last_played_animation_id = "";
++
++    while (running_) {
++        std::unique_lock<std::mutex> lock(mutex_);
++        cv_.wait(lock, [this]{ return !current_animation_id_.empty() || !running_; });
++
++        if (!running_) {
++            break;
++        }
++
++        if (last_played_animation_id != current_animation_id_) {
++            last_played_animation_id = current_animation_id_;
++            current_frame_index = 0;
++        }
++
++        auto it = std::find_if(animations_.begin(), animations_.end(), [&](const Animation& anim) {
++            return anim.id == current_animation_id_;
++        });
++
++        if (it == animations_.end() || it->frames.empty()) {
++            lock.unlock();
++            vTaskDelay(pdMS_TO_TICKS(100));
++            continue;
++        }
++
++        const auto& current_animation = *it;
++        const auto& frame_to_play = current_animation.frames[current_frame_index];
++        int delay_ms = 1000 / current_animation.fps;
++
++        lock.unlock();
++
++        matrix_set_pattern(frame_to_play.data);
++        
++        vTaskDelay(pdMS_TO_TICKS(delay_ms));
++
++        // Re-lock to update frame index safely
++        std::lock_guard<std::mutex> update_lock(mutex_);
++        if (last_played_animation_id == current_animation_id_) { // Check if animation changed during delay
++             current_frame_index = (current_frame_index + 1) % current_animation.frames.size();
++        }
++    }
++}
++
++esp_err_t Pet::set_animations(const std::vector<Animation>& animations) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    animations_ = animations;
++    // If the current animation is no longer valid, stop it.
++    auto it = std::find_if(animations_.begin(), animations_.end(), [&](const Animation& anim) {
++        return anim.id == current_animation_id_;
++    });
++    if (it == animations_.end()) {
++        current_animation_id_ = -1;
++    }
++    return ESP_OK;
++}
++
++std::vector<Pet::Animation> Pet::get_animations() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return animations_;
++}
++
++esp_err_t Pet::set_current_animation(const std::string& id) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    auto it = std::find_if(animations_.begin(), animations_.end(), [&](const Animation& anim) {
++        return anim.id == id;
++    });
++
++    if (it == animations_.end()) {
++        return ESP_ERR_NOT_FOUND;
++    }
++
++    current_animation_id_ = id;
++    cv_.notify_one(); // Notify the task that the animation has changed
++    return ESP_OK;
++}
++
++std::string Pet::get_current_animation_id() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return current_animation_id_;
++}
+diff --git a/main/modules/pet.h b/main/modules/pet.h
+new file mode 100644
+index 0000000..6ffc29a
+--- /dev/null
++++ b/main/modules/pet.h
+@@ -0,0 +1,48 @@
++#ifndef __PET_H__
++#define __PET_H__
++
++#include <vector>
++#include <string>
++#include <cstdint>
++#include "esp_err.h"
++#include "led/gpio_led.h"
++#include <condition_variable>
++#include <mutex>
++#include "freertos/task.h"
++
++class Pet {
++public:
++    struct Frame {
++        uint8_t data[8];
++    };
++
++    struct Animation {
++        std::string id;
++        std::string description;
++        int fps;
++        std::vector<Frame> frames;
++    };
++
++    // Public API
++    Pet();
++    ~Pet();
++    esp_err_t init();
++    esp_err_t set_animations(const std::vector<Animation>& animations);
++    std::vector<Animation> get_animations();
++    esp_err_t set_current_animation(const std::string& id);
++    std::string get_current_animation_id();
++    void animation_task();
++
++private:
++    std::vector<Animation> animations_;
++    std::string current_animation_id_;
++    
++    // Using C++ standard library for threading
++    std::mutex mutex_;
++    std::condition_variable cv_;
++    bool running_;
++    // The task handle is still needed for FreeRTOS task management
++    TaskHandle_t task_handle_; 
++};
++
++#endif // __PET_H__
+diff --git a/main/ota.cc b/main/ota.cc
+index 2cc8215..4fdf704 100644
+--- a/main/ota.cc
++++ b/main/ota.cc
+@@ -160,6 +160,25 @@ bool Ota::CheckVersion() {
+         ESP_LOGI(TAG, "No mqtt section found !");
+     }
+ 
++    cJSON *mqtt_ctl = cJSON_GetObjectItem(root, "mqtt_ctl");
++    if (cJSON_IsObject(mqtt_ctl)) {
++        Settings settings("mqtt_ctl", true);
++        cJSON *item = NULL;
++        cJSON_ArrayForEach(item, mqtt_ctl) {
++            if (cJSON_IsString(item)) {
++                if (settings.GetString(item->string) != item->valuestring) {
++                    settings.SetString(item->string, item->valuestring);
++                }
++            } else if (cJSON_IsNumber(item)) {
++                if (settings.GetInt(item->string) != item->valueint) {
++                    settings.SetInt(item->string, item->valueint);
++                }
++            }
++        }
++    } else {
++        ESP_LOGI(TAG, "No mqtt state section found !");
++    }
++
+     has_websocket_config_ = false;
+     cJSON *websocket = cJSON_GetObjectItem(root, "websocket");
+     if (cJSON_IsObject(websocket)) {
+diff --git a/sdkconfig.defaults.esp32s3 b/sdkconfig.defaults.esp32s3
+index 40036e4..1f8cb83 100644
+--- a/sdkconfig.defaults.esp32s3
++++ b/sdkconfig.defaults.esp32s3
+@@ -1,12 +1,11 @@
+-
+-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
++CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+ CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+ 
+ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+ 
+ CONFIG_SPIRAM=y
+-CONFIG_SPIRAM_MODE_OCT=y
+-CONFIG_SPIRAM_SPEED_80M=y
++# CONFIG_SPIRAM_MODE_OCT=y
++# CONFIG_SPIRAM_SPEED_80M=y
+ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+ CONFIG_SPIRAM_MEMTEST=n
+@@ -16,6 +15,8 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+ CONFIG_ESP32S3_DATA_CACHE_64KB=y
+ CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+ 
+-CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
+-
+ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
++
++CONFIG_SR_WN_WN9_HIESP=y
++CONFIG_BOARD_TYPE_BREAD_BE_YOUR_EYES=y
++CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v1/4m.csv"
+\ No newline at end of file
