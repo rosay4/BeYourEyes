@@ -1,5 +1,6 @@
 // app/(tabs)/settings.tsx
 import SettingsListItem from '@/components/SettingsListItem'; // 导入我们创建的组件
+import { useRouter } from 'expo-router'; // 1. 导入 useRouter
 import React from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar } from 'react-native-paper';
@@ -15,7 +16,8 @@ const SettingsGroup: React.FC<{ title?: string; children: React.ReactNode }> = (
 );
 
 export default function SettingsScreen() {
-  // 临时性的点击处理函数，只弹出一个提示
+  const router = useRouter(); // 2. 获取 router 实例
+
   const handlePress = (featureName: string) => {
     Alert.alert("功能待开发", `${featureName} 功能正在全力开发中，敬请期待！`);
   };
@@ -50,7 +52,7 @@ export default function SettingsScreen() {
         </SettingsGroup>
 
         {/* --- 分组 2: 内容管理 --- */}
-        <SettingsGroup title="内容管理">
+        <SettingsGroup title="功能与服务">
           <SettingsListItem
             icon="file-import"
             iconColor="#34C759"

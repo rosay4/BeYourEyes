@@ -1,5 +1,5 @@
 // app/(tabs)/_layout.tsx
-import { Ionicons } from '@expo/vector-icons';
+import { FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Tabs } from 'expo-router';
 import React from 'react';
@@ -101,6 +101,14 @@ export default function TabLayout() {
         options={{
           title: '创作',
           tabBarIcon: ({ color }) => <TabBarIcon name="brush-outline" color={color} />,
+          tabBarButton: (props) => <CustomTabBarButton {...props} />,
+        }}
+      />
+            <Tabs.Screen
+        name="ai_chat"
+        options={{
+          title: '助手',
+          tabBarIcon: ({ color }) => <FontAwesome5 size={24} name="robot" color={color} />,
           tabBarButton: (props) => <CustomTabBarButton {...props} />,
         }}
       />
