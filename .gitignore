@@ -38,3 +38,4 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+模型源文件.zip
