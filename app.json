@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +20,9 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.beyoureyes.lumipetapp"
+      "package": "com.beyoureyes.lumipetapp",
+      "usesCleartextTraffic": true ,
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "bundler": "metro",
@@ -45,6 +50,9 @@
         "projectId": "5c7eff95-5825-466e-a0ac-e662d0947068"
       }
     },
-    "owner": "rosay4"
+    "owner": "rosay4",
+    "updates": {
+      "url": "https://u.expo.dev/5c7eff95-5825-466e-a0ac-e662d0947068"
+    }
   }
 }

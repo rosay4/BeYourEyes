@@ -1,6 +1,7 @@
 // services/VideoProcessingService.ts
 import * as FileSystem from 'expo-file-system';
-import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native';
+import { FFmpegKit, ReturnCode } from 'kroog-ffmpeg-kit-react-native';
+
 
 class VideoProcessingService {
   /**

@@ -1,4 +1,4 @@
-package com.anonymous.lumipetapp
+package com.beyoureyes.lumipetapp
 
 import android.app.Application
 import android.content.res.Configuration

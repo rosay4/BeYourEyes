@@ -1,4 +1,4 @@
-package com.anonymous.lumipetapp
+package com.beyoureyes.lumipetapp
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
